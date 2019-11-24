@@ -5,77 +5,103 @@
  * clears execute in 1.075 seconds and images are drawn in 1.531 seconds.
  */
 #include "Arduino.h"
-#include "image.hpp"
+//#include "image.hpp"
 #include "EPD.hpp"
 #include "font.h"
 #include "firasans.h"
 
-/* Display State Machine */
-enum ScreenState {
-        CLEAR_SCREEN = 0,
-        DRAW_SCREEN = 1,
-        CLEAR_PARTIAL = 2,
-        DRAW_SQUARES = 3,
-};
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
+#include <time.h>
+#include <WiFi.h>
 
 EPD* epd;
+SPIClass* spi;
+
+void draw_caption(File* file) {
+    int fn_len = strlen(file->name());
+    char* caption = (char*)malloc(fn_len);
+    char* filename = (char*)file->name();
+    char* fn_ptr = strrchr(filename, '/');
+    fn_ptr++;
+    char* ptr = caption;
+    while (fn_ptr < strrchr(filename, '.')) {
+        *(ptr++) = *(fn_ptr++);
+    }
+    *(ptr++) = 0;
+    Serial.print("Displaying: ");
+    Serial.println(caption);
+
+    int x, y, w, h;
+    getTextBounds((GFXfont*)&FiraSans, (unsigned char*)caption, 0, 100, &x, &y, &w, &h);
+
+    x = 1100 - w;
+    Rect_t font_area = Rect_t {
+        .x = x - 5,
+        .y = y - 5,
+        .width = w + 10,
+        .height = h + 10,
+    };
+    epd->draw_byte(&font_area, 80, 0B10101010);
+    y = 100;
+    writeln((GFXfont*)&FiraSans, (unsigned char*)caption, &x, &y, epd);
+    free(caption);
+}
 
 void setup() {
     Serial.begin(115200);
     epd = new EPD(1200, 825);
+
+    spi = new SPIClass();
+    spi->begin(22, 35, 21, 12);
+
+    if(!SD.begin(12, *spi, 80000000)){
+        Serial.println("Card Mount Failed");
+        return;
+    }
+    uint8_t cardType = SD.cardType();
+
+    if(cardType == CARD_NONE){
+        Serial.println("No SD card attached");
+        return;
+    }
+
+    Serial.print("SD Card Type: ");
+    if(cardType == CARD_MMC){
+        Serial.println("MMC");
+    } else if(cardType == CARD_SD){
+        Serial.println("SDSC");
+    } else if(cardType == CARD_SDHC){
+        Serial.println("SDHC");
+    } else {
+        Serial.println("UNKNOWN");
+    }
+
+    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+    Serial.printf("SD Card Size: %lluMB\n", cardSize);
 }
 
 void loop() {
-        // Variables to set one time.
-        static ScreenState _state = CLEAR_SCREEN;
+    File root = SD.open("/");
+    File file = root.openNextFile();
+    while(file) {
+        Serial.print("  FILE: ");
+        Serial.print(file.name());
+        Serial.print("  SIZE: ");
+        Serial.print(file.size());
+        time_t t= file.getLastWrite();
+        struct tm * tmstruct = localtime(&t);
+        Serial.printf("  LAST WRITE: %d-%02d-%02d %02d:%02d:%02d\n",(tmstruct->tm_year)+1900,( tmstruct->tm_mon)+1, tmstruct->tm_mday,tmstruct->tm_hour , tmstruct->tm_min, tmstruct->tm_sec);
 
-        delay(300);
         epd->poweron();
-        uint32_t timestamp = 0;
-        if (_state == CLEAR_SCREEN) {
-                Serial.println("Clear cycle.");
-                Serial.flush();
-                timestamp = millis();
-                epd->clear_screen();
-                _state = DRAW_SCREEN;
-
-        } else if (_state == DRAW_SCREEN) {
-                Serial.println("Draw cycle.");
-                timestamp = millis();
-                epd->draw_picture(epd->full_screen(), (uint8_t*)&img_bytes);
-                _state = CLEAR_PARTIAL;
-
-        } else if (_state == CLEAR_PARTIAL) {
-                Serial.println("Partial clear cycle.");
-                timestamp = millis();
-                Rect_t area = {
-                    .x = 100,
-                    .y = 100,
-                    .width = epd->width - 200,
-                    .height = epd->height - 200,
-                };
-                epd->clear_area(area);
-                _state = DRAW_SQUARES;
-        } else if (_state == DRAW_SQUARES) {
-                Serial.println("Squares cycle.");
-                timestamp = millis();
-                int cursor_x = 100;
-                int cursor_y = 100;
-                unsigned char* string = (unsigned char*)"Hello World! *g*";
-                writeln((GFXfont*)&FiraSans, string, &cursor_x, &cursor_y, epd);
-                cursor_y += FiraSans.advance_y;
-                string = (unsigned char*)"\xf6\xfc\xe4\xdf" "abcd/#{";
-                writeln((GFXfont*)&FiraSans, string, &cursor_x, &cursor_y, epd);
-                _state = CLEAR_SCREEN;
-        }
+        epd->clear_screen();
+        Serial.println(epd->draw_sd_image(&file));
+        draw_caption(&file);
         epd->poweroff();
-        // Print out the benchmark
-        timestamp = millis() - timestamp;
-        Serial.print("Took ");
-        Serial.print(timestamp);
-        Serial.println(" ms to redraw the screen.");
-
-        // Wait 4 seconds then do it again
-        delay(4000);
-        Serial.println("Going active again.");
+        file.close();
+        file = root.openNextFile();
+        delay(10000);
+    }
+    root.close();
 }

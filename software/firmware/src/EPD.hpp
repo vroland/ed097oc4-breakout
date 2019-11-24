@@ -3,6 +3,7 @@
  */
 #pragma once
 #include "Arduino.h"
+#include "FS.h"
 
 typedef struct {
     uint16_t x;
@@ -29,6 +30,9 @@ class EPD {
         /* Clear an area by flashing it white -> black -> white */
         void clear_area(Rect_t area); 
 
+        /* Lighten an area for usecs microseconds */
+        void lighten_area(uint16_t usecs); 
+
         /* 
          * Draw a picture to a given area. The picture must be given as
          * sequence of 4-bit brightness values, packed as two pixels per byte.
@@ -37,6 +41,12 @@ class EPD {
          * The given area must be white before drawing.
          */
         void draw_picture(Rect_t area, uint8_t* data);
+
+        /*
+         * Draw an uncompressed, 8-bit grayscale 1200*825 bitmap image from
+         * the sd card.
+         */
+        int draw_sd_image(File* file);
 
         /*
          * Returns a rectancle representing the whole screen area.
